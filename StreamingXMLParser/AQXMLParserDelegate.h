@@ -42,6 +42,8 @@
 @interface AQXMLParserDelegate : NSObject <AQXMLParserDelegate>
 {
 	NSString *				_characters;
+    	NSMutableDictionary *   		_selectorCacheStart; 
+    	NSMutableDictionary *   		_selectorCacheEnd;
 }
 @property (nonatomic, copy) NSString * characters;
 @end

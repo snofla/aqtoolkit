@@ -41,17 +41,84 @@
 
 @interface AQXMLParserDelegate (ParserMagic)
 
+- (NSString *) _methodNameForStartElement: (NSString *) element;
+- (NSString *) _methodNameForEndElement: (NSString *) element;
 - (SEL) _startSelectorForElement: (NSString *) elementName;
 - (SEL) _endSelectorForElement: (NSString *) elementName;
 
 @end
 
+@interface AQXMLElementSelector : NSObject {
+@public
+    SEL sel;
+}
+- (id) initWithSelector: (SEL) sel_;
+@end
+
+@implementation AQXMLElementSelector 
+
+- (id) initWithSelector: (SEL) sel_ 
+{
+    if (nil == (self = [super init]))
+        return nil;
+    sel = sel_;
+    return self;
+}
+
+@end
+
+
 @implementation AQXMLParserDelegate
 
 @synthesize characters=_characters;
 
+- (SEL) findStartElementMethod: (NSString *) element {
+    AQXMLElementSelector *startElemSel = [_selectorCacheStart objectForKey: element];
+    if (startElemSel) 
+    {
+        return startElemSel->sel;
+    }
+    SEL sel = [self _startSelectorForElement: element];
+    if ([self respondsToSelector: sel]) 
+    {
+        startElemSel = [[[AQXMLElementSelector alloc] initWithSelector: sel] autorelease];
+        [_selectorCacheStart setObject: startElemSel forKey: element];    
+        return sel;
+    }
+    return nil;
+}
+
+- (SEL) findEndElementMethod: (NSString *) element {
+    AQXMLElementSelector *endElemSel = [_selectorCacheEnd objectForKey: element];
+    if (endElemSel) 
+    {
+        return endElemSel->sel;
+    }
+    SEL sel = [self _endSelectorForElement: element];
+    if ([self respondsToSelector: sel]) 
+    {
+        endElemSel = [[[AQXMLElementSelector alloc] initWithSelector: sel] autorelease];
+        [_selectorCacheEnd setObject: endElemSel forKey: element];  
+        return sel;
+    }
+    return nil;
+}
+
+- (id) init 
+{
+    if (nil == (self = [super init])) 
+    {
+        return nil;
+    }
+    _selectorCacheStart = [[NSMutableDictionary dictionary] retain];
+    _selectorCacheEnd   = [[NSMutableDictionary dictionary] retain];
+    return self;
+}
+
 - (void) dealloc
 {
+    [_selectorCacheStart release];
+    [_selectorCacheEnd release];    
 	[_characters release];
 	[super dealloc];
 }
@@ -61,10 +128,10 @@
      attributes: (NSDictionary *) attributeDict
 {
 	NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
-	
-	SEL selector = [self _startSelectorForElement: elementName];
-	
-    if ( [self respondsToSelector: selector] )
+    
+	SEL selector = [self findStartElementMethod: elementName];
+    
+    if ( selector )
     {
         //NSLog( @"Parser: calling -%@", NSStringFromSelector(selector) );
         [self performSelector: selector withObject: attributeDict];
@@ -80,9 +147,9 @@
 {
 	NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
 	
-	SEL selector = [self _endSelectorForElement: elementName];
+	SEL selector = [self findEndElementMethod: elementName];
 	
-    if ( [self respondsToSelector: selector] )
+    if ( selector )
     {
         //NSLog( @"Parser: calling -%@", NSStringFromSelector(selector) );
         [self performSelector: selector];
@@ -128,7 +195,7 @@
 
 @implementation AQXMLParserDelegate (ParserMagic)
 
-- (SEL) _startSelectorForElement: (NSString *) element
+- (NSString *) _methodNameForStartElement: (NSString *) element 
 {
     NSString * str = nil;
     NSMutableString * eSel = [NSMutableString stringWithString: [[element substringWithRange: NSMakeRange(0,1)] uppercaseString]];
@@ -148,10 +215,11 @@
 	
 	str = [NSString stringWithFormat: @"start%@WithAttributes:", eSel];
 	
-    return ( NSSelectorFromString(str) );
+    return str;
 }
 
-- (SEL) _endSelectorForElement: (NSString *) element
+
+- (NSString *) _methodNameForEndElement: (NSString *) element 
 {
     NSString * str = nil;
     NSMutableString * eSel = [NSMutableString stringWithString: [[element substringWithRange: NSMakeRange(0,1)] uppercaseString]];
@@ -170,7 +238,19 @@
 	}
 	
 	str = [NSString stringWithFormat: @"end%@", eSel];
-	
+
+    return str;
+}
+
+- (SEL) _startSelectorForElement: (NSString *) element
+{
+    NSString *str = [self _methodNameForStartElement: element];
+    return ( NSSelectorFromString(str) );
+}
+
+- (SEL) _endSelectorForElement: (NSString *) element
+{
+    NSString *str = [self _methodNameForEndElement: element];
     return ( NSSelectorFromString(str) );
 }
 
