@@ -39,86 +39,141 @@
 #import "AQXMLParserDelegate.h"
 #import "AQXMLParser.h"
 
-@interface AQXMLParserDelegate (ParserMagic)
+#if TARGET_OS_IPHONE
+# import <UIKit/UIApplication.h>
+#endif
 
-- (NSString *) _methodNameForStartElement: (NSString *) element;
-- (NSString *) _methodNameForEndElement: (NSString *) element;
-- (SEL) _startSelectorForElement: (NSString *) elementName;
-- (SEL) _endSelectorForElement: (NSString *) elementName;
-
-@end
-
-@interface AQXMLElementSelector : NSObject {
-@public
-    SEL sel;
-}
-- (id) initWithSelector: (SEL) sel_;
-@end
-
-@implementation AQXMLElementSelector 
-
-- (id) initWithSelector: (SEL) sel_ 
+static CFStringRef _selectorDescription( const void * value )
 {
-    if (nil == (self = [super init]))
-        return nil;
-    sel = sel_;
-    return self;
+    return ( (CFStringRef) [NSStringFromSelector((SEL)value) copy] );
+}
+
+@interface _AQXMLParserSelectorCache : NSObject
+{
+    CFMutableDictionaryRef  _startSelectorCache;
+    CFMutableDictionaryRef  _endSelectorCache;
+}
+
+- (void) emptyCache;
+
+- (SEL) startSelectorForElement: (NSString *) elementName;
+- (SEL) endSelectorForElement: (NSString *) elementName;
+
+@end
+
+@implementation _AQXMLParserSelectorCache
+
+- (id) init
+{
+    if ( [super init] == nil )
+        return ( nil );
+    
+    CFDictionaryValueCallBacks cb = { 0, NULL, NULL, _selectorDescription, NULL };
+    _startSelectorCache = CFDictionaryCreateMutable( kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &cb );
+    _endSelectorCache = CFDictionaryCreateMutable( kCFAllocatorDefault, 0, &kCFCopyStringDictionaryKeyCallBacks, &cb );
+    
+#if TARGET_OS_IPHONE
+    [[NSNotificationCenter defaultCenter] addObserver: self
+                                             selector: @selector(emptyCache)
+                                                 name: UIApplicationDidReceiveMemoryWarningNotification
+                                               object: nil];
+#endif
+    
+    return ( self );
+}
+
+- (void) dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver: self];
+    CFRelease( _startSelectorCache );
+    CFRelease( _endSelectorCache );
+    [super dealloc];
+}
+
+- (SEL) startSelectorForElement: (NSString *) element
+{
+    SEL result = (SEL) CFDictionaryGetValue( _startSelectorCache, element );
+    if ( result != NULL )
+        return ( result );
+    
+    NSString * str = nil;
+    NSMutableString * eSel = [NSMutableString stringWithString: [[element substringWithRange: NSMakeRange(0,1)] uppercaseString]];
+	
+    if ( [element length] > 1 )
+	{
+        [eSel appendString: [element substringFromIndex: 1]];
+		
+		NSRange range = [eSel rangeOfString: @"-"];
+		for ( ; range.location != NSNotFound; range = [eSel rangeOfString: @"-"] )
+		{
+			NSString * cap = [[eSel substringWithRange: NSMakeRange(range.location+1, 1)] uppercaseString];
+			range.length += 1;
+			[eSel replaceCharactersInRange: range withString: cap];
+		}
+	}
+	
+	str = [NSString stringWithFormat: @"start%@WithAttributes:", eSel];
+    
+    result = NSSelectorFromString( str );
+    CFDictionaryAddValue( _startSelectorCache, element, result );
+    
+    return ( result );
+}
+
+- (SEL) endSelectorForElement: (NSString *) element
+{
+    SEL result = (SEL) CFDictionaryGetValue( _endSelectorCache, element );
+    if ( result != NULL )
+        return ( result );
+    
+    NSString * str = nil;
+    NSMutableString * eSel = [NSMutableString stringWithString: [[element substringWithRange: NSMakeRange(0,1)] uppercaseString]];
+	
+    if ( [element length] > 1 )
+	{
+        [eSel appendString: [element substringFromIndex: 1]];
+		
+		NSRange range = [eSel rangeOfString: @"-"];
+		for ( ; range.location != NSNotFound; range = [eSel rangeOfString: @"-"] )
+		{
+			NSString * cap = [[eSel substringWithRange: NSMakeRange(range.location+1, 1)] uppercaseString];
+			range.length += 1;
+			[eSel replaceCharactersInRange: range withString: cap];
+		}
+	}
+	
+	str = [NSString stringWithFormat: @"end%@", eSel];
+    
+    result = NSSelectorFromString( str );
+    CFDictionaryAddValue( _endSelectorCache, element, result );
+    
+    return ( result );
+}
+
+- (void) emptyCache
+{
+    CFDictionaryRemoveAllValues( _startSelectorCache );
+    CFDictionaryRemoveAllValues( _endSelectorCache );
 }
 
 @end
 
+#pragma mark -
+
+static _AQXMLParserSelectorCache * __selectorCache = nil;
 
 @implementation AQXMLParserDelegate
 
 @synthesize characters=_characters;
 
-- (SEL) findStartElementMethod: (NSString *) element {
-    AQXMLElementSelector *startElemSel = [_selectorCacheStart objectForKey: element];
-    if (startElemSel) 
-    {
-        return startElemSel->sel;
-    }
-    SEL sel = [self _startSelectorForElement: element];
-    if ([self respondsToSelector: sel]) 
-    {
-        startElemSel = [[[AQXMLElementSelector alloc] initWithSelector: sel] autorelease];
-        [_selectorCacheStart setObject: startElemSel forKey: element];    
-        return sel;
-    }
-    return nil;
-}
-
-- (SEL) findEndElementMethod: (NSString *) element {
-    AQXMLElementSelector *endElemSel = [_selectorCacheEnd objectForKey: element];
-    if (endElemSel) 
-    {
-        return endElemSel->sel;
-    }
-    SEL sel = [self _endSelectorForElement: element];
-    if ([self respondsToSelector: sel]) 
-    {
-        endElemSel = [[[AQXMLElementSelector alloc] initWithSelector: sel] autorelease];
-        [_selectorCacheEnd setObject: endElemSel forKey: element];  
-        return sel;
-    }
-    return nil;
-}
-
-- (id) init 
++ (void) initialize
 {
-    if (nil == (self = [super init])) 
-    {
-        return nil;
-    }
-    _selectorCacheStart = [[NSMutableDictionary dictionary] retain];
-    _selectorCacheEnd   = [[NSMutableDictionary dictionary] retain];
-    return self;
+    if ( self == [AQXMLParserDelegate class] )
+        __selectorCache = [[_AQXMLParserSelectorCache alloc] init];
 }
 
 - (void) dealloc
 {
-    [_selectorCacheStart release];
-    [_selectorCacheEnd release];    
 	[_characters release];
 	[super dealloc];
 }
@@ -128,10 +183,10 @@
      attributes: (NSDictionary *) attributeDict
 {
 	NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
-    
-	SEL selector = [self findStartElementMethod: elementName];
-    
-    if ( selector )
+	
+	SEL selector = [__selectorCache startSelectorForElement: elementName];
+	
+    if ( [self respondsToSelector: selector] )
     {
         //NSLog( @"Parser: calling -%@", NSStringFromSelector(selector) );
         [self performSelector: selector withObject: attributeDict];
@@ -147,7 +202,7 @@
 {
 	NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
 	
-	SEL selector = [self findEndElementMethod: elementName];
+	SEL selector = [__selectorCache endSelectorForElement: elementName];
 	
     if ( selector )
     {
@@ -189,69 +244,6 @@
 - (void) parser: (AQXMLParser *) parser parseErrorOccurred: (NSError *) error
 {
 	// superclass does nothing
-}
-
-@end
-
-@implementation AQXMLParserDelegate (ParserMagic)
-
-- (NSString *) _methodNameForStartElement: (NSString *) element 
-{
-    NSString * str = nil;
-    NSMutableString * eSel = [NSMutableString stringWithString: [[element substringWithRange: NSMakeRange(0,1)] uppercaseString]];
-	
-    if ( [element length] > 1 )
-	{
-        [eSel appendString: [element substringFromIndex: 1]];
-		
-		NSRange range = [eSel rangeOfString: @"-"];
-		for ( ; range.location != NSNotFound; range = [eSel rangeOfString: @"-"] )
-		{
-			NSString * cap = [[eSel substringWithRange: NSMakeRange(range.location+1, 1)] uppercaseString];
-			range.length += 1;
-			[eSel replaceCharactersInRange: range withString: cap];
-		}
-	}
-	
-	str = [NSString stringWithFormat: @"start%@WithAttributes:", eSel];
-	
-    return str;
-}
-
-
-- (NSString *) _methodNameForEndElement: (NSString *) element 
-{
-    NSString * str = nil;
-    NSMutableString * eSel = [NSMutableString stringWithString: [[element substringWithRange: NSMakeRange(0,1)] uppercaseString]];
-	
-    if ( [element length] > 1 )
-	{
-        [eSel appendString: [element substringFromIndex: 1]];
-		
-		NSRange range = [eSel rangeOfString: @"-"];
-		for ( ; range.location != NSNotFound; range = [eSel rangeOfString: @"-"] )
-		{
-			NSString * cap = [[eSel substringWithRange: NSMakeRange(range.location+1, 1)] uppercaseString];
-			range.length += 1;
-			[eSel replaceCharactersInRange: range withString: cap];
-		}
-	}
-	
-	str = [NSString stringWithFormat: @"end%@", eSel];
-
-    return str;
-}
-
-- (SEL) _startSelectorForElement: (NSString *) element
-{
-    NSString *str = [self _methodNameForStartElement: element];
-    return ( NSSelectorFromString(str) );
-}
-
-- (SEL) _endSelectorForElement: (NSString *) element
-{
-    NSString *str = [self _methodNameForEndElement: element];
-    return ( NSSelectorFromString(str) );
 }
 
 @end
